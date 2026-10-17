@@ -13,7 +13,7 @@ import { Construct } from 'constructs'
 
 const PROJECT = 'lambda-web-functions-scaling-throttling'
 const DIST = path.join(__dirname, '../../app/dist')
-const CONCURRENCIES = [1, 16, 64, 128]
+const CONCURRENCIES = [1, 16, 32, 64, 128]
 const MAX_ENVIRONMENTS = 10 // 費用の上限（1 環境 2 vCPU）
 
 export class ScalingThrottlingStack extends Stack {
@@ -21,6 +21,8 @@ export class ScalingThrottlingStack extends Stack {
     super(scope, id, props)
 
     const suffix = this.node.tryGetContext('bucket_suffix') ?? this.account
+    // -c disabled=true で全エンドポイントの rateLimit を 0 にして遮断する（503 Platform.EndpointDisabled）。検証の合間に置いておくとき用
+    const disabled = this.node.tryGetContext('disabled') === 'true'
     const retention = logs.RetentionDays.ONE_WEEK
 
     // Web Functions はコードを S3 の .zip から読み、バージョニングが必須。4 関数で 1 バケットを共有する
@@ -92,6 +94,7 @@ export class ScalingThrottlingStack extends Stack {
           authType: 'ApplicationManaged', // 認証なし。検証が終わったらすぐ destroy する前提
           revisionWeights: [{ revisionId: revision.attrRevisionId, weight: 100 }],
           ...scaling,
+          ...(disabled ? { throttleConfig: { rateLimit: 0 } } : {}),
         })
         new CfnOutput(this, `UrlC${c}${endpointName}`, { value: `https://${ep.attrDomainName}/` })
       }

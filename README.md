@@ -28,7 +28,7 @@ Load script (your PC)
 |---|---|
 | app/ | Hono app (app/src/index.ts), bundled by esbuild into app/dist/index.js |
 | cdk/ | CDK (S3 bucket, 8 log groups, 4 Web Functions, 4 revisions, 6 endpoints) |
-| scripts/ | load.mjs (load), run-all.sh (all experiments in order), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
+| scripts/ | load.mjs (load), run-all.sh (all experiments in order), run-extra.sh (extra light-load experiments), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
 
 ## Requirements
 
@@ -79,6 +79,12 @@ node scripts/load.mjs --url <UrlC64rate100> --name rate100 --rps 300 --duration 
 
 # Run experiments 1-6 in order (10 min gap between conditions; caffeinate keeps the Mac awake)
 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
+# Extra: environment count under light load (10 concurrent for 5 min, 2 / 4 / 10 concurrent from zero)
+caffeinate -i scripts/run-extra.sh cdk/outputs.json
+
+# Disable all endpoints with rateLimit 0 between experiments (returns 503 Platform.EndpointDisabled)
+cd cdk && pnpm exec cdk deploy -c disabled=true
 ```
 
 Results are saved to results/<name>_<start>.json. The summary holds status counts, lambda-web-error-type counts, requests per environment and p50 / p95 latency.

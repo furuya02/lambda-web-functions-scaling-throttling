@@ -28,7 +28,7 @@ AWS Lambda Web Functions に I/O 待ち主体の負荷をかけ、実行環境�
 |---|---|
 | app/ | Hono アプリ（app/src/index.ts）。esbuild で app/dist/index.js にまとめる |
 | cdk/ | CDK（S3 バケット、ロググループ × 8、Web Function × 4、リビジョン × 4、エンドポイント × 6） |
-| scripts/ | load.mjs（負荷）、run-all.sh（全検証を順番に）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
+| scripts/ | load.mjs（負荷）、run-all.sh（全検証を順番に）、run-extra.sh（小さな負荷の追加検証）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
 
 ## 必要要件
 
@@ -79,6 +79,12 @@ node scripts/load.mjs --url <UrlC64rate100> --name rate100 --rps 300 --duration 
 
 # 検証 1〜6 を順番に流す（条件の間は 10 分待つ。Mac の sleep を防ぐため caffeinate 下で）
 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
+# 追加検証: 小さな負荷での環境数（同時 10 件を 5 分、環境ゼロからの同時 2 / 4 / 10 件）
+caffeinate -i scripts/run-extra.sh cdk/outputs.json
+
+# 全エンドポイントを rateLimit 0 で遮断する（検証の合間に置いておくとき。503 Platform.EndpointDisabled になる）
+cd cdk && pnpm exec cdk deploy -c disabled=true
 ```
 
 結果は results/<name>_<開始時刻>.json に保存されます。summary に status / lambda-web-error-type / 環境ごとの件数 / 応答時間 p50・p95 が入ります。
