@@ -81,6 +81,9 @@ PHASE=first caffeinate -i scripts/run-all.sh cdk/outputs.json
 # Steady: the same 4 conditions on the exercised function, then 200 concurrent on maxenv2 and 300 rps on rate100
 PHASE=steady caffeinate -i scripts/run-all.sh cdk/outputs.json
 
+# maxEnvironments right after deploy: recreate the stack (destroy, then deploy), then without any curl send 200 concurrent to maxenv2 for 36 rounds
+PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
 # Aggregate (environments per round, requests per environment, status)
 python3 scripts/summarize.py results/*.json
 

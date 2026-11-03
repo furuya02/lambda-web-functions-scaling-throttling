@@ -3,6 +3,7 @@
 # 使い方: caffeinate -i scripts/run-all.sh cdk/outputs.json
 #   PHASE=first  … デプロイ直後（関数を一度も動かしていない状態）の 4 条件
 #   PHASE=steady … 一度動かした後の 4 条件 + maxenv2 + rate100
+#   PHASE=fresh-maxenv2 … デプロイ直後（一度も動かしていない関数）の maxenv2 に同時 200 件。スタックを作り直してから流す
 set -eu
 OUT=${1:-cdk/outputs.json}
 PHASE=${PHASE:-first}
@@ -11,6 +12,10 @@ GAP=${GAP:-420}
 wait_gap() { echo "--- $(date -u +%H:%M:%SZ) wait ${GAP}s (環境がゼロに戻るまで) ---"; sleep "$GAP"; }
 
 echo "--- $(date -u +%H:%M:%SZ) start PHASE=$PHASE ---"
+if [ "$PHASE" = fresh-maxenv2 ]; then
+  node scripts/load.mjs --url "$(url Urlmaxenv2)" --name "maxenv2-n200-fresh" --concurrency 200 --ms 5000 --rounds 36
+  echo "--- $(date -u +%H:%M:%SZ) done ---"; exit 0
+fi
 # 1. 同時数ランプ（prod、待ち 5 秒、36 ラウンド = 約 3 分）
 for N in 10 50 100 200; do
   node scripts/load.mjs --url "$(url Urlprod)" --name "n$N-$PHASE" --concurrency $N --ms 5000 --rounds 36
