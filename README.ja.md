@@ -28,7 +28,7 @@ AWS Lambda Web Functions に I/O 待ち主体の負荷をかけ、実行環境�
 |---|---|
 | app/ | Hono アプリ（app/src/index.ts）。esbuild で app/dist/index.js にまとめる |
 | cdk/ | CDK（S3 バケット、ロググループ × 8、Web Function × 4、リビジョン × 4、エンドポイント × 6） |
-| scripts/ | load.mjs（負荷）、run-all.sh（全検証を順番に）、run-extra.sh（小さな負荷の追加検証）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
+| scripts/ | load.mjs（負荷）、run-all.sh（全検証を順番に）、run-extra.sh（小さな負荷の追加検証）、run-steady.sh（学習済み関数での再計測）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
 
 ## 必要要件
 
@@ -82,6 +82,9 @@ caffeinate -i scripts/run-all.sh cdk/outputs.json
 
 # 追加検証: 小さな負荷での環境数（同時 10 件を 5 分、環境ゼロからの同時 2 / 4 / 10 件）
 caffeinate -i scripts/run-extra.sh cdk/outputs.json
+
+# 再計測: 一度動かした c64 に同時 10 / 50 / 100 / 200 件を各 36 ラウンド（約 3 分）
+caffeinate -i scripts/run-steady.sh cdk/outputs.json
 
 # 全エンドポイントを rateLimit 0 で遮断する（検証の合間に置いておくとき。503 Platform.EndpointDisabled になる）
 cd cdk && pnpm exec cdk deploy -c disabled=true

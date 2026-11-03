@@ -28,7 +28,7 @@ Load script (your PC)
 |---|---|
 | app/ | Hono app (app/src/index.ts), bundled by esbuild into app/dist/index.js |
 | cdk/ | CDK (S3 bucket, 8 log groups, 4 Web Functions, 4 revisions, 6 endpoints) |
-| scripts/ | load.mjs (load), run-all.sh (all experiments in order), run-extra.sh (extra light-load experiments), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
+| scripts/ | load.mjs (load), run-all.sh (all experiments in order), run-extra.sh (extra light-load experiments), run-steady.sh (re-measurement on an exercised function), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
 
 ## Requirements
 
@@ -82,6 +82,9 @@ caffeinate -i scripts/run-all.sh cdk/outputs.json
 
 # Extra: environment count under light load (10 concurrent for 5 min, 2 / 4 / 10 concurrent from zero)
 caffeinate -i scripts/run-extra.sh cdk/outputs.json
+
+# Re-measure: 10 / 50 / 100 / 200 concurrent for 36 rounds (~3 min) each on an already-exercised function
+caffeinate -i scripts/run-steady.sh cdk/outputs.json
 
 # Disable all endpoints with rateLimit 0 between experiments (returns 503 Platform.EndpointDisabled)
 cd cdk && pnpm exec cdk deploy -c disabled=true
