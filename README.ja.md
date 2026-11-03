@@ -81,6 +81,9 @@ PHASE=first caffeinate -i scripts/run-all.sh cdk/outputs.json
 # 定常: 一度動かした関数に同じ 4 条件 + maxenv2 に同時 200 件 + rate100 に毎秒 300 件
 PHASE=steady caffeinate -i scripts/run-all.sh cdk/outputs.json
 
+# デプロイ直後の maxEnvironments: スタックを作り直し（destroy → deploy）、curl せずに maxenv2 へ同時 200 件を 36 ラウンド
+PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
 # 結果の集計（ラウンドごとの環境数、環境あたりの件数、status）
 python3 scripts/summarize.py results/*.json
 
