@@ -84,6 +84,10 @@ PHASE=steady caffeinate -i scripts/run-all.sh cdk/outputs.json
 # デプロイ直後の maxEnvironments: スタックを作り直し（destroy → deploy）、curl せずに maxenv2 へ同時 200 件を 36 ラウンド
 PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
 
+# 新しいリビジョンで学習値が引き継がれるか: 環境変数だけ違うリビジョンをデプロイしてから、同じく maxenv2 へ同時 200 件
+(cd cdk && pnpm exec cdk deploy -c revision_tag=r2 --outputs-file outputs.json)
+PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
 # 結果の集計（ラウンドごとの環境数、環境あたりの件数、status）
 python3 scripts/summarize.py results/*.json
 

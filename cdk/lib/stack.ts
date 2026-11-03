@@ -22,6 +22,8 @@ export class ScalingThrottlingStack extends Stack {
     const suffix = this.node.tryGetContext('bucket_suffix') ?? this.account
     // -c disabled=true で全エンドポイントの rateLimit を 0 にして遮断する（503 Platform.EndpointDisabled）。検証の合間に置いておくとき用
     const disabled = this.node.tryGetContext('disabled') === 'true'
+    // -c revision_tag=xxx で、コードと設定は同じまま環境変数だけ違う新しいリビジョンを作る（学習値が引き継がれるかの確認用）
+    const revisionTag: string | undefined = this.node.tryGetContext('revision_tag')
     const retention = logs.RetentionDays.ONE_WEEK
 
     // Web Functions はコードを S3 の .zip から読み、バージョニングが必須
@@ -77,6 +79,7 @@ export class ScalingThrottlingStack extends Stack {
       serviceConfig: {
         executionRoleArn: role.roleArn,
         timeoutSeconds: 60, // 待ち時間の最大 20 秒 + 余裕
+        ...(revisionTag ? { environmentVariables: { REVISION_TAG: revisionTag } } : {}),
         // maxConcurrencyPerEnvironment は指定しない（既定の 64）
         // platform.requestComplete（リクエストごとの result / errorType）を出すために DEBUG にする
         telemetryConfig: { loggingConfig: { systemLogLevel: 'DEBUG' } },
