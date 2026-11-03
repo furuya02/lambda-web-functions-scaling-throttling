@@ -6,20 +6,17 @@ Sample to measure how many execution environments AWS Lambda Web Functions start
 
 ## Overview
 
-A single Hono app that waits for the requested time and returns (`GET /wait?ms=N`, a pseudo LLM) is deployed to four Web Functions that differ only in maxConcurrencyPerEnvironment.
+A single Hono app that waits for the requested time and returns (`GET /wait?ms=N`, a pseudo LLM) is deployed to one Web Function (maxConcurrencyPerEnvironment left at the default 64) with three endpoints.
 
 ```
 Load script (your PC)
-  ├─ c1   … maxConcurrencyPerEnvironment 1   / prod    (maxEnvironments 10)
-  ├─ c16  … maxConcurrencyPerEnvironment 16  / prod    (maxEnvironments 10)
-  ├─ c64  … maxConcurrencyPerEnvironment 64  / prod    (maxEnvironments 10)
-  │                                           / maxenv2 (maxEnvironments 2)
-  │                                           / rate100 (rateLimit 100 rps)
-  └─ c128 … maxConcurrencyPerEnvironment 128 / prod    (maxEnvironments 10)
+  └─ Web Function (maxConcurrencyPerEnvironment 64)
+       ├─ prod    … maxEnvironments 10 (how many environments start)
+       ├─ maxenv2 … maxEnvironments 2  (429 from the environment limit)
+       └─ rate100 … rateLimit 100 rps  (429 from the request-rate limit)
 ```
 
-- maxConcurrencyPerEnvironment is a revision setting and environment metrics are per function, so each condition gets its own Web Function
-- maxEnvironments and rateLimit are endpoint settings, so c64 gets extra endpoints to hit those limits
+- maxEnvironments and rateLimit are endpoint settings, so extra endpoints on the same function are used to hit those limits
 - systemLogLevel is DEBUG so that platform.requestComplete (result / errorType) is logged per request
 
 ## Layout
@@ -27,8 +24,8 @@ Load script (your PC)
 | Directory | Contents |
 |---|---|
 | app/ | Hono app (app/src/index.ts), bundled by esbuild into app/dist/index.js |
-| cdk/ | CDK (S3 bucket, 8 log groups, 4 Web Functions, 4 revisions, 6 endpoints) |
-| scripts/ | load.mjs (load), run-all.sh (all experiments in order), run-extra.sh (extra light-load experiments), run-steady.sh (re-measurement on an exercised function), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
+| cdk/ | CDK (S3 bucket, 2 log groups, 1 Web Function, 1 revision, 3 endpoints) |
+| scripts/ | load.mjs (load), run-all.sh (experiments in order), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
 
 ## Requirements
 
@@ -51,16 +48,17 @@ pnpm -C cdk install
 pnpm -C cdk cdk deploy --outputs-file outputs.json
 ```
 
-Note the outputs UrlC1prod / UrlC16prod / UrlC64prod / UrlC64maxenv2 / UrlC64rate100 / UrlC128prod.
+Note the outputs Urlprod / Urlmaxenv2 / Urlrate100.
 
 - The S3 bucket name suffix defaults to the account ID (override with `-c bucket_suffix=xxx`)
 - cdk synth prints `Unknown resource type 'AWS::Lambda::WebFunction'` warnings; they do not affect the deployment
 - Before deploying, check your account vCPU quota with `aws lambda-web get-web-account-settings` (new accounts have reduced quotas; maxEnvironments 10 = 20 vCPUs)
+- To observe the first-run behavior of a function (environments start at 2 requests each and spread out), do not curl the endpoint after deploying; start the load directly
 
 ## Verify
 
 ```bash
-curl -i "<UrlC64prod>wait?ms=1000"
+curl -i "<Urlprod>wait?ms=1000"
 # {"ms":1000,"env":"6b4bbf51","inflight":1,"peak":1}
 ```
 
@@ -71,20 +69,20 @@ curl -i "<UrlC64prod>wait?ms=1000"
 ## Load
 
 ```bash
-# 50 concurrent, 5 s wait, 10 rounds (closed-loop)
-node scripts/load.mjs --url <UrlC64prod> --name c64-n50 --concurrency 50 --ms 5000 --rounds 10
+# 50 concurrent, 5 s wait, 36 rounds (closed-loop)
+node scripts/load.mjs --url <Urlprod> --name n50 --concurrency 50 --ms 5000 --rounds 36
 
 # 300 requests per second for 30 s, no wait (open-loop, hits rateLimit 100)
-node scripts/load.mjs --url <UrlC64rate100> --name rate100 --rps 300 --duration 30 --path /
+node scripts/load.mjs --url <Urlrate100> --name rate100 --rps 300 --duration 30 --path /
 
-# Run experiments 1-6 in order (10 min gap between conditions; caffeinate keeps the Mac awake)
-caffeinate -i scripts/run-all.sh cdk/outputs.json
+# First run: 10 / 50 / 100 / 200 concurrent for 36 rounds each on the freshly deployed function (7 min gap between conditions; caffeinate keeps the Mac awake)
+PHASE=first caffeinate -i scripts/run-all.sh cdk/outputs.json
 
-# Extra: environment count under light load (10 concurrent for 5 min, 2 / 4 / 10 concurrent from zero)
-caffeinate -i scripts/run-extra.sh cdk/outputs.json
+# Steady: the same 4 conditions on the exercised function, then 200 concurrent on maxenv2 and 300 rps on rate100
+PHASE=steady caffeinate -i scripts/run-all.sh cdk/outputs.json
 
-# Re-measure: 10 / 50 / 100 / 200 concurrent for 36 rounds (~3 min) each on an already-exercised function
-caffeinate -i scripts/run-steady.sh cdk/outputs.json
+# Aggregate (environments per round, requests per environment, status)
+python3 scripts/summarize.py results/*.json
 
 # Disable all endpoints with rateLimit 0 between experiments (returns 503 Platform.EndpointDisabled)
 cd cdk && pnpm exec cdk deploy -c disabled=true
@@ -96,11 +94,11 @@ Results are saved to results/<name>_<start>.json. The summary holds status count
 
 ```bash
 # EndpointActiveEnvironments, EnvironmentConcurrentRequests and the throttle metrics per minute
-scripts/metrics.sh 64 prod 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z
+scripts/metrics.sh prod 2026-11-03T12:00:00Z 2026-11-03T12:10:00Z
 
 # platform.* system logs from the .local log group, in order (optionally filtered by type)
-scripts/logs.sh 64 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z
-scripts/logs.sh 64 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z invokeSummary
+scripts/logs.sh 2026-11-03T12:00:00Z 2026-11-03T12:10:00Z
+scripts/logs.sh 2026-11-03T12:00:00Z 2026-11-03T12:10:00Z invokeSummary
 ```
 
 ## Clean up
@@ -109,7 +107,7 @@ scripts/logs.sh 64 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z invokeSummary
 pnpm -C cdk cdk destroy
 ```
 
-This removes the S3 bucket, all 8 log groups (including .local), the Web Functions and the endpoints.
+This removes the S3 bucket, both log groups (including .local), the Web Function and the endpoints.
 Web Functions scale to zero environments without traffic, so nothing accrues while idle, but destroy the stack once you are done.
 
 ## License
