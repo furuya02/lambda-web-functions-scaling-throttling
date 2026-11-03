@@ -1,11 +1,11 @@
 #!/bin/bash
 # CloudWatch からスケーリングとスロットリングのメトリクスを取る（読み取りのみ）
-# 使い方: scripts/metrics.sh <関数の同時数 1|16|64|128> <エンドポイント名> <開始 ISO8601 UTC> <終了 ISO8601 UTC>
-#   例: scripts/metrics.sh 64 prod 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z
+# 使い方: scripts/metrics.sh <エンドポイント名> <開始 ISO8601 UTC> <終了 ISO8601 UTC>
+#   例: scripts/metrics.sh prod 2026-10-17T03:00:00Z 2026-10-17T03:10:00Z
 set -eu
-C=$1; EP=$2; START=$3; END=$4
+EP=$1; START=$2; END=$3
 REGION=${AWS_REGION:-ap-northeast-1}
-FN=lambda-web-functions-scaling-throttling-c$C
+FN=lambda-web-functions-scaling-throttling
 PERIOD=60
 
 get() { # namespace metric stat dimensions...

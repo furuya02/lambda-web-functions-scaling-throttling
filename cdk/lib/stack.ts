@@ -1,7 +1,7 @@
-// 同じ Hono アプリ（app/dist）を maxConcurrencyPerEnvironment の異なる 4 つの Web Function に載せるスタック
-//   c1 / c16 / c64 / c128 … 各 1 エンドポイント（prod、maxEnvironments 10）
-//   c64 にはさらに maxenv2（maxEnvironments 2）と rate100（rateLimit 100）のエンドポイントを追加
-// maxConcurrencyPerEnvironment はリビジョン設定、環境メトリクスは FunctionName 単位なので、条件ごとに Web Function を分ける
+// Hono アプリ（app/dist）を 1 つの Web Function（maxConcurrencyPerEnvironment は既定の 64）に載せ、3 つのエンドポイントを付けるスタック
+//   prod    … maxEnvironments 10（環境がいくつ立つかを見る）
+//   maxenv2 … maxEnvironments 2（環境数の上限で 429 を出す）
+//   rate100 … rateLimit 100（毎秒のリクエスト数の上限で 429 を出す）
 import * as path from 'node:path'
 import { CfnOutput, Fn, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam'
@@ -13,7 +13,6 @@ import { Construct } from 'constructs'
 
 const PROJECT = 'lambda-web-functions-scaling-throttling'
 const DIST = path.join(__dirname, '../../app/dist')
-const CONCURRENCIES = [1, 16, 32, 64, 128]
 const MAX_ENVIRONMENTS = 10 // 費用の上限（1 環境 2 vCPU）
 
 export class ScalingThrottlingStack extends Stack {
@@ -25,7 +24,7 @@ export class ScalingThrottlingStack extends Stack {
     const disabled = this.node.tryGetContext('disabled') === 'true'
     const retention = logs.RetentionDays.ONE_WEEK
 
-    // Web Functions はコードを S3 の .zip から読み、バージョニングが必須。4 関数で 1 バケットを共有する
+    // Web Functions はコードを S3 の .zip から読み、バージョニングが必須
     const bucket = new s3.Bucket(this, 'CodeBucket', {
       bucketName: `${PROJECT}-${suffix}`,
       versioned: true,
@@ -38,7 +37,7 @@ export class ScalingThrottlingStack extends Stack {
         actions: ['s3:GetObject', 's3:GetObjectVersion'],
         resources: [bucket.arnForObjects('*')],
         conditions: {
-          ArnLike: { 'aws:SourceArn': `arn:aws:lambda:${this.region}:${this.account}:web-function/${PROJECT}-*/revision/*` },
+          ArnLike: { 'aws:SourceArn': `arn:aws:lambda:${this.region}:${this.account}:web-function/${PROJECT}/revision/*` },
         },
       }),
     )
@@ -54,56 +53,52 @@ export class ScalingThrottlingStack extends Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
     })
 
-    for (const c of CONCURRENCIES) {
-      const name = `${PROJECT}-c${c}`
+    const name = PROJECT
 
-      // ロググループ（集約先と .local）は Lambda が既定設定（保持無期限）で作る前に CDK で作っておく
-      const logGroup = new logs.LogGroup(this, `LogGroup${c}`, {
-        logGroupName: `/aws/lambda/web/${name}`,
-        retention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      })
-      const localLogGroup = new logs.LogGroup(this, `LocalLogGroup${c}`, {
-        logGroupName: `/aws/lambda/web/${name}.local`,
-        retention,
-        removalPolicy: RemovalPolicy.DESTROY,
-      })
+    // ロググループ（集約先と .local）は Lambda が既定設定（保持無期限）で作る前に CDK で作っておく
+    const logGroup = new logs.LogGroup(this, 'LogGroup', {
+      logGroupName: `/aws/lambda/web/${name}`,
+      retention,
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
+    const localLogGroup = new logs.LogGroup(this, 'LocalLogGroup', {
+      logGroupName: `/aws/lambda/web/${name}.local`,
+      retention,
+      removalPolicy: RemovalPolicy.DESTROY,
+    })
 
-      const fn = new lambda.CfnWebFunction(this, `WebFunction${c}`, { functionName: name })
-      const revision = new lambda.CfnWebFunctionRevision(this, `Revision${c}`, {
+    const fn = new lambda.CfnWebFunction(this, 'WebFunction', { functionName: name })
+    const revision = new lambda.CfnWebFunctionRevision(this, 'Revision', {
+      functionName: fn.ref,
+      buildConfig: {
+        runtimeConfig: { runtime: 'nodejs24.x' },
+        codeConfig: { s3Object: { bucket: bucket.bucketName, key: Fn.select(0, code.objectKeys) } },
+      },
+      serviceConfig: {
+        executionRoleArn: role.roleArn,
+        timeoutSeconds: 60, // 待ち時間の最大 20 秒 + 余裕
+        // maxConcurrencyPerEnvironment は指定しない（既定の 64）
+        // platform.requestComplete（リクエストごとの result / errorType）を出すために DEBUG にする
+        telemetryConfig: { loggingConfig: { systemLogLevel: 'DEBUG' } },
+      },
+    })
+    revision.node.addDependency(code, bucket.policy!, logGroup, localLogGroup)
+
+    const makeEndpoint = (endpointName: string, scaling: Record<string, unknown>) => {
+      const ep = new lambda.CfnWebFunctionEndpoint(this, `Endpoint${endpointName}`, {
         functionName: fn.ref,
-        buildConfig: {
-          runtimeConfig: { runtime: 'nodejs24.x' },
-          codeConfig: { s3Object: { bucket: bucket.bucketName, key: Fn.select(0, code.objectKeys) } },
-        },
-        serviceConfig: {
-          executionRoleArn: role.roleArn,
-          timeoutSeconds: 60, // 待ち時間の最大 20 秒 + 余裕
-          maxConcurrencyPerEnvironment: c,
-          // platform.requestComplete（リクエストごとの result / errorType）を出すために DEBUG にする
-          telemetryConfig: { loggingConfig: { systemLogLevel: 'DEBUG' } },
-        },
+        endpointName,
+        endpointType: 'HomeRegion',
+        authType: 'ApplicationManaged', // 認証なし。検証が終わったらすぐ destroy する前提
+        revisionWeights: [{ revisionId: revision.attrRevisionId, weight: 100 }],
+        ...scaling,
+        ...(disabled ? { throttleConfig: { rateLimit: 0 } } : {}),
       })
-      revision.node.addDependency(code, bucket.policy!, logGroup, localLogGroup)
-
-      const makeEndpoint = (endpointName: string, scaling: Record<string, unknown>) => {
-        const ep = new lambda.CfnWebFunctionEndpoint(this, `Endpoint${c}${endpointName}`, {
-          functionName: fn.ref,
-          endpointName,
-          endpointType: 'HomeRegion',
-          authType: 'ApplicationManaged', // 認証なし。検証が終わったらすぐ destroy する前提
-          revisionWeights: [{ revisionId: revision.attrRevisionId, weight: 100 }],
-          ...scaling,
-          ...(disabled ? { throttleConfig: { rateLimit: 0 } } : {}),
-        })
-        new CfnOutput(this, `UrlC${c}${endpointName}`, { value: `https://${ep.attrDomainName}/` })
-      }
-
-      makeEndpoint('prod', { scalingConfig: { maxEnvironments: MAX_ENVIRONMENTS } })
-      if (c === 64) {
-        makeEndpoint('maxenv2', { scalingConfig: { maxEnvironments: 2 } })
-        makeEndpoint('rate100', { scalingConfig: { maxEnvironments: MAX_ENVIRONMENTS }, throttleConfig: { rateLimit: 100 } })
-      }
+      new CfnOutput(this, `Url${endpointName}`, { value: `https://${ep.attrDomainName}/` })
     }
+
+    makeEndpoint('prod', { scalingConfig: { maxEnvironments: MAX_ENVIRONMENTS } })
+    makeEndpoint('maxenv2', { scalingConfig: { maxEnvironments: 2 } })
+    makeEndpoint('rate100', { scalingConfig: { maxEnvironments: MAX_ENVIRONMENTS }, throttleConfig: { rateLimit: 100 } })
   }
 }
