@@ -25,7 +25,7 @@ AWS Lambda Web Functions に I/O 待ち主体の負荷をかけ、実行環境�
 |---|---|
 | app/ | Hono アプリ（app/src/index.ts）。esbuild で app/dist/index.js にまとめる |
 | cdk/ | CDK（S3 バケット、ロググループ × 2、Web Function、リビジョン、エンドポイント × 3） |
-| scripts/ | load.mjs（負荷）、run-all.sh（検証を順番に）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
+| scripts/ | load.mjs（負荷）、run-all.sh（検証を順番に）、run-planb.sh（同じ負荷を 2 つの状態で）、summarize.py（結果の集計）、metrics.sh（CloudWatch）、logs.sh（platform.* ログ） |
 
 ## 必要要件
 
@@ -53,6 +53,7 @@ pnpm -C cdk cdk deploy --outputs-file outputs.json
 - S3 バケット名のサフィックスは既定でアカウント ID です（`-c bucket_suffix=xxx` で変更）
 - cdk synth で `Unknown resource type 'AWS::Lambda::WebFunction'` の警告が出ますが、デプロイには影響しません
 - デプロイ前に `aws lambda-web get-web-account-settings` でアカウントの vCPU クォータを確認してください（新規アカウントは低く設定されています。maxEnvironments 10 = 20 vCPU）
+- スタックを作り直した直後は、最初の数件が 502 Platform.CannotAssumeRole になることがあります（実行ロールを作った直後のため）
 - 関数を初めて動かしたときの挙動（環境あたり 2 件から始めて横に広がる）を見たい場合は、デプロイ後に動作確認の curl をせず、そのまま負荷をかけてください
 
 ## 動作確認
@@ -87,6 +88,12 @@ PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
 # 新しいリビジョンで学習値が引き継がれるか: 環境変数だけ違うリビジョンをデプロイしてから、同じく maxenv2 へ同時 200 件
 (cd cdk && pnpm exec cdk deploy -c revision_tag=r2 --outputs-file outputs.json)
 PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
+# 同じ 6 つの負荷を 2 つの状態でかける（約 1 時間 45 分。記事で使った手順）
+#   fresh   … 負荷ごとにスタックを作り直し（destroy → deploy）、curl せずに負荷をかける
+#   learned … prod に同時 10 件を約 3 分流して暖め、負荷ごとに 7 分空けて流す
+# 最後に全エンドポイントを rateLimit 0 で遮断する。途中から再開するときは LOADS="n200 maxenv2 rate100"（fresh）や LEARNED_LOADS=...（learned）で負荷を絞る
+caffeinate -i scripts/run-planb.sh all > results/run-planb.log 2>&1
 
 # 結果の集計（ラウンドごとの環境数、環境あたりの件数、status）
 python3 scripts/summarize.py results/*.json

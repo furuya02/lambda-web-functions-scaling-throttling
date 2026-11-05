@@ -25,7 +25,7 @@ Load script (your PC)
 |---|---|
 | app/ | Hono app (app/src/index.ts), bundled by esbuild into app/dist/index.js |
 | cdk/ | CDK (S3 bucket, 2 log groups, 1 Web Function, 1 revision, 3 endpoints) |
-| scripts/ | load.mjs (load), run-all.sh (experiments in order), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
+| scripts/ | load.mjs (load), run-all.sh (experiments in order), run-planb.sh (same loads in two states), summarize.py (aggregate results), metrics.sh (CloudWatch), logs.sh (platform.* logs) |
 
 ## Requirements
 
@@ -53,6 +53,7 @@ Note the outputs Urlprod / Urlmaxenv2 / Urlrate100.
 - The S3 bucket name suffix defaults to the account ID (override with `-c bucket_suffix=xxx`)
 - cdk synth prints `Unknown resource type 'AWS::Lambda::WebFunction'` warnings; they do not affect the deployment
 - Before deploying, check your account vCPU quota with `aws lambda-web get-web-account-settings` (new accounts have reduced quotas; maxEnvironments 10 = 20 vCPUs)
+- Right after the stack is (re)created, the first few requests can return 502 Platform.CannotAssumeRole (the execution role was just created)
 - To observe the first-run behavior of a function (environments start at 2 requests each and spread out), do not curl the endpoint after deploying; start the load directly
 
 ## Verify
@@ -87,6 +88,12 @@ PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
 # Does a new revision keep what was learned? Deploy a revision that differs only in an environment variable, then send 200 concurrent to maxenv2 again
 (cd cdk && pnpm exec cdk deploy -c revision_tag=r2 --outputs-file outputs.json)
 PHASE=fresh-maxenv2 caffeinate -i scripts/run-all.sh cdk/outputs.json
+
+# Same 6 loads in two states, about 1 h 45 min (used for the article):
+#   fresh   ... recreate the stack (destroy, then deploy) before each load, and send the load without any curl
+#   learned ... warm up prod with 10 concurrent for about 3 min, then run each load with a 7 min gap
+# Finally disables all endpoints with rateLimit 0. Resume part of it with LOADS="n200 maxenv2 rate100" (fresh) or LEARNED_LOADS=... (learned)
+caffeinate -i scripts/run-planb.sh all > results/run-planb.log 2>&1
 
 # Aggregate (environments per round, requests per environment, status)
 python3 scripts/summarize.py results/*.json
